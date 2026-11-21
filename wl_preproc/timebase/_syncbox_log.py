@@ -55,6 +55,12 @@ class SyncBoxLog:
     barcodes: tuple[tuple[int, int], ...]
     codes: tuple[tuple[int, int], ...]
     losses: tuple[Loss, ...]
+    #: For each loss, in `losses`' order, the tick of the first code word the
+    #: log holds after it, where it is a `desync` the box left open: since
+    #: wl-sync `fc18551` the box pairs its FIFO's stream again and goes on, and
+    #: that word is "the first code word known to follow the loss" (wl-sync's
+    #: note 8). None for every other loss, and where no code word follows.
+    desync_ends: tuple[int | None, ...] = ()
 
 
 def read_syncbox_log(path: Path) -> SyncBoxLog:
@@ -89,7 +95,26 @@ def _read(path: Path, _mtime_ns: int, _size: int) -> SyncBoxLog:
                        if isinstance(record, BarcodeEmitted)),
         codes=tuple((record.tick_us, record.word) for record in records if isinstance(record, CodeWord)),
         losses=tuple(record for record in records if isinstance(record, Loss)),
+        desync_ends=_desync_ends(records),
     )
+
+
+def _desync_ends(records: list) -> tuple[int | None, ...]:
+    """`SyncBoxLog.desync_ends`, read in the log's own order: a `W` loss is in
+    its path's stream, which is in tick order, so the first code word written
+    after the record is the first to follow the loss."""
+    ends: list[int | None] = []
+    open_desyncs: list[int] = []
+    for record in records:
+        if isinstance(record, Loss):
+            ends.append(None)
+            if record.cause == "desync" and record.after_us is None:
+                open_desyncs.append(len(ends) - 1)
+        elif isinstance(record, CodeWord) and open_desyncs:
+            for index in open_desyncs:
+                ends[index] = record.tick_us
+            open_desyncs.clear()
+    return tuple(ends)
 
 
 def read_barcode_entries(path: Path) -> list[tuple[int, int]]:

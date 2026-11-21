@@ -1,8 +1,9 @@
 """The sync box's losses, stored and checked (design spec
 `2026-11-04-syncbox-header-design.md` sections 6 and 8): each `L` record kept
 as the box wrote it, and each gap, in `timebase.SyncBoxSegment.Loss`, placed in
-session time; a desync, or code words lost in a measured run, fail the
-session's timing check, and a lost edge does not. A database declared before
+session time; code words lost in a measured run fail the session's timing
+check, a desync among them once the next code word closes it (wl-sync's note
+8), and a lost edge does not. A database declared before
 the header named its process is refused, and told how to alter it."""
 
 from __future__ import annotations
@@ -14,12 +15,12 @@ from tests.identities import new_animal
 
 @pytest.fixture(scope="module")
 def landed(dj_conn, prefix, tmp_path_factory):
-    """Six `ci` sessions of one animal on one day, in runs, after one daemon
-    pass, deleted after the module: the box's word pump stopped by a desync at
-    6 s; an edge lost on a photodiode inside the first run; a gap of 3 s from
-    5.5 s, inside a run; a box whose code words are on a split clock; a box
-    that restarted at 7.5 s; and a photodiode line that garbled three pairs
-    of edges. Yields their keys, by name, the daemon's report, and the folder
+    """Seven `ci` sessions of one animal on one day, in runs, after one daemon
+    pass, deleted after the module: a desync at 6 s, code words following it
+    (wl-sync's note 8); an edge lost on a photodiode inside the first run; a
+    gap of 3 s from 5.5 s, inside a run; a box whose code words are on a split
+    clock; one on wl-sync's one count (note 7); a box that restarted at 7.5 s;
+    and a photodiode line that garbled three pairs of edges. Yields their keys, by name, the daemon's report, and the folder
     they were landed from."""
     from wl_sync.pins import GPIO_MAP
 
@@ -40,6 +41,8 @@ def landed(dj_conn, prefix, tmp_path_factory):
                                                      gpio=GPIO_MAP["pd1_comp"]),)}),
         ("gap", {"syncbox_roll": SyncBoxRollSpec(at_s=5.5, gap_s=3.0)}),
         ("split", {"syncbox_timebase": "split"}),
+        # The one count measures no barcode delay: its `B` tick is the lead edge itself (note 7).
+        ("one_count", {"syncbox_timebase": "rp1-pio-si", "syncbox_barcode_delay_us": 0}),
         ("restart", {"syncbox_restart": SyncBoxRestartSpec(at_s=7.5, gap_s=1.2)}),
         ("noisy", {"syncbox_losses": tuple(
             SyncBoxLossSpec(cause="coalesced", from_s=from_s, to_s=to_s, gpio=GPIO_MAP["pd1_comp"])
@@ -72,6 +75,11 @@ def test_each_loss_is_stored_as_the_box_wrote_it_and_placed_in_session_time(land
     (gap,) = (timebase.SyncBoxSegment.Loss & keys["gap"]).to_dicts()
     assert (gap["segment_index"], gap["cause"], gap["lost"]) == (1, "gap", None)
     assert gap["start_s"] < 5.5 and 8.5 <= gap["stop_s"] < 9.5
+    # A desync is stored with its end empty, as the box wrote it, and placed
+    # to the first code word after it (wl-sync's note 8).
+    (desync,) = (timebase.SyncBoxSegment.Loss & keys["desync"]).to_dicts()
+    assert (desync["cause"], desync["after_us"]) == ("desync", None)
+    assert (desync["start_s"], desync["stop_s"]) == pytest.approx((6.0, 6.001), abs=1e-6)
 
 
 def test_a_desync_or_a_gap_in_a_run_fails_the_timing_check_and_a_lost_edge_does_not(landed):
@@ -208,7 +216,9 @@ def test_the_report_names_each_loss_and_what_it_did_to_its_session(landed, prefi
 
     keys, _, _ = landed
     section = _section(_report(landed, prefix), "Sync box losses (24 h)")
-    assert ("at least 2 code words lost (desync), from 6.000 s on; fails the session's timing check (tier D)"
+    # Closed by the first code word after it, 1 ms on (wl-sync's note 8), and
+    # inside the run, so it still fails the session's timing check.
+    assert ("at least 2 code words lost (desync), from 6.000 s to 6.001 s; fails the session's timing check (tier D)"
             in _line_for(section, _at(keys["desync"])))
     assert (f"3 edges lost on GPIO{GPIO_MAP['pd1_comp']} (buffer_overflow), from 1.200 s to 1.400 s; reported only"
             in _line_for(section, _at(keys["edge"])))
@@ -228,6 +238,7 @@ def test_the_report_names_each_session_whose_code_words_are_on_a_split_clock(lan
     assert ("timebase `split`: its code words can lie up to 0.001 s from its barcodes at 50 ppm, the rate "
             "unmeasured; nothing is corrected" in _line_for(section, _at(keys["split"])))
     assert not [line for line in section.splitlines() if _at(keys["edge"]) in line]
+    assert not [line for line in section.splitlines() if _at(keys["one_count"]) in line]
     assert _declared_count(section) == len([line for line in section.splitlines() if line.startswith("- ")])
 
 

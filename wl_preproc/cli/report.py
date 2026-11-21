@@ -20,6 +20,7 @@ from wl_sync.clock import BARCODE_EPOCH
 from wl_preproc.cli.doctor import scratch_headroom
 from wl_preproc.eye.detect.geometry import PER_AXIS, TRUE_ANGLE, UNSTATED_GEOMETRY
 from wl_preproc.schema import DEFAULT_PREFIX
+from wl_preproc.timebase.segments import ONE_COUNT_TIMEBASES
 
 # Ingested is windowed to 24 h because "what landed since yesterday's report"
 # is the question that section answers. Quarantine is not the same question and
@@ -1432,8 +1433,10 @@ def _landed_without(session: dict) -> str:
 #: `2026-11-04-syncbox-header-design.md` section 7).
 SPLIT_CLOCK_PPM = 50.0
 #: The `timebase` values whose ticks share one rate: the test backend's, with no
-#: hardware clock. Every other value, or none, leaves the rates unknown.
-ONE_RATE_TIMEBASES = frozenset({"fake"})
+#: hardware clock, and the two of wl-sync's one-clock build, which put every
+#: path on one count at one rate (its note 7). Every other value, or none,
+#: leaves the rates unknown.
+ONE_RATE_TIMEBASES = frozenset({"fake"}) | ONE_COUNT_TIMEBASES
 
 
 def _syncbox_losses(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[dict]:
